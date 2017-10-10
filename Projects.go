@@ -8,7 +8,12 @@ import (
   "golang.org/x/net/html"
 )
 
-func getProjectList(url string) []string {
+type group struct {
+  groupId string
+  artifacts []string
+}
+
+func getGroupIds(url string) []string {
   var list []string
   page, _ := http.Get(url)
   tokenizer := html.NewTokenizer(page.Body)
@@ -23,9 +28,7 @@ func getProjectList(url string) []string {
 
     if t.Data == "a" {
       for _, a := range t.Attr {
-        xml := strings.Contains(string(a.Key), "xml")
-        txt := strings.Contains(string(a.Key), "txt")
-        if a.Key == "href" && !xml && !txt {
+        if a.Key == "href" && !strings.Contains(a.Val, ".") {
           list = append(list, strings.Trim(a.Val, "/"))
         }
       }
@@ -37,27 +40,46 @@ func getProjectList(url string) []string {
   return list
 }
 
-func downloadProject(project string, finished chan bool) {
-  cmdUrl := "-DrepoUrl=\"http://repo1.maven.org/maven2\""
-  artifact := "-Dartifact=" + project + ":" + project + ":LATEST"
+func getProjectList(baseUrl string) []group {
+  groupIds := getGroupIds(baseUrl)
+  groupList := make([]group, len(groupIds))
 
-  cmd := exec.Command("mvn", "dependency:get", cmdUrl, artifact)
-  cmd.Run()
-  fmt.Println("Downloaded " + project)
+  for i := range groupIds {
+    artifacts := getGroupIds(baseUrl + groupIds[i])
+    groupList[i] = group{groupIds[i], artifacts}
+  }
+
+  return groupList
+}
+
+func downloadProject(repoUrl string, project group, finished chan bool) {
+  cmdUrl := "-DrepoUrl=\"" + repoUrl + "\""
+  for i := range project.artifacts {
+    artifact := "-Dartifact=" + project.groupId + ":" + project.artifacts[i] + ":LATEST"
+    cmd := exec.Command("mvn", "dependency:get", cmdUrl, artifact)
+    cmd.Run()
+  }
 
   finished <- true
 }
 
 func main() {
-  projects := getProjectList("http://repo1.maven.org/maven2")
+  batchLength := 10
+  batchNum := 10
+  repository := "http://repo1.maven.org/maven2/"
+  projects := getProjectList(repository)
 
-  complete := make([]chan bool, len(projects))
-  for i := 0; i < 10; i++ {
-    go downloadProject(projects[i], complete[i])
-  }
+  for i := 0; i < batchNum; i++ {
+    complete := make([]chan bool, batchLength)
+    for j := 0; j < batchLength; j++ {
+      complete[j] = make(chan bool, 1)
+      go downloadProject(repository, projects[(i + 1) * j], complete[(i + 1) * j])
+    }
 
-  for i := range complete {
-    <-complete[i]
+    for i := 0; i < batchLength; i++ {
+      <-complete[i]
+      fmt.Println("Downloaded " + projects[i].groupId)
+    }
   }
   fmt.Println("Download completed")
 }
