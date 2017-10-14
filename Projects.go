@@ -1,16 +1,19 @@
 package main
 
 import (
+  "bufio"
   "fmt"
+  "os"
   "strings"
   "os/exec"
   "net/http"
   "golang.org/x/net/html"
   "io/ioutil"
   "encoding/xml"
+  "io"
 )
 
-type Query struct {
+type Project struct {
 	GroupId string `xml:"groupId"`
 	ArtifactId string `xml:"artifactId"`
 	Latest string `xml:"versioning>latest"`
@@ -18,13 +21,30 @@ type Query struct {
 	Versions []string `xml:"versioning>versions>version"`
 }
 
+type Dependencies struct {
+  GroupIds []string `xml:"dependencies>dependency>groupId"`
+  ArtifactIds []string `xml:"dependencies>dependency>artifactId"`
+  Versions []string `xml:"dependencies>dependency>version"`
+}
+
 type group struct {
   groupId string
   artifacts []string
 }
 
-func parsePomFiles() {
-
+func resolveDependencies(projectUrl string, repoUrl string) {
+  var deps Dependencies
+  page,_ := http.Get(projectUrl)
+  if page.StatusCode == 200 {
+    data,_ := ioutil.ReadAll(page.Body)
+    xml.Unmarshal(data, &deps)
+    /*
+    for i := range deps.GroupIds {
+      depUrl := repoUrl + deps.GroupIds[i] + "/" + deps.ArtifactIds[i] + "/" + deps.Versions[i]
+      //downloadProject(depUrl)
+    }
+    */
+  }
 }
 
 func getGroupIds(url string) []string {
@@ -54,20 +74,58 @@ func getGroupIds(url string) []string {
   return list
 }
 
-func getProjectList(baseUrl string) []group {
-  groupIds := getGroupIds(baseUrl)
-  groupList := make([]group, len(groupIds))
+func saveGroups(groups []group) {
+  file,_ := os.Create("groupIds.txt")
+  for i := range groups {
+    groupCsv := groups[i].groupId
 
-  for i := range groupIds {
-    artifacts := getGroupIds(baseUrl + groupIds[i])
-    groupList[i] = group{groupIds[i], artifacts}
+    for _,artifact := range groups[i].artifacts {
+      groupCsv = groupCsv + "," + artifact
+    }
+    newLine := []byte(groupCsv + "\n")
+
+    file.Write(newLine)
   }
-
-  return groupList
+  file.Close()
 }
 
-func getMetaData(group string, artifact string, url string) {
-    var metaData Query
+func readGroups(file *os.File) []group {
+  var groups []group
+  scanner := bufio.NewScanner(file)
+
+  for scanner.Scan() {
+    line := string(scanner.Text())
+    lineParts := strings.Split(line, ",")
+    groups = append(groups, group{lineParts[0], lineParts[1:]})
+  }
+  file.Close()
+
+  return groups
+}
+
+func getProjectList(baseUrl string) []group {
+  groupIds := getGroupIds(baseUrl)
+  file,err := os.Open("groupIds.txt")
+
+  if err != nil {
+    groupList := make([]group, len(groupIds))
+
+    for i := range groupIds {
+      artifacts := getGroupIds(baseUrl + groupIds[i])
+      groupList[i] = group{groupIds[i], artifacts}
+    }
+    saveGroups(groupList)
+    file.Close()
+
+    return groupList
+  } else {
+    return readGroups(file)
+  }
+
+}
+
+func getMetaData(group string, artifact string, url string) Project {
+    var metaData Project
 
     cmdUrl := url + string(group) + "/" + artifact + "/maven-metadata.xml"
     fmt.Println(cmdUrl)
@@ -77,17 +135,41 @@ func getMetaData(group string, artifact string, url string) {
       xml.Unmarshal(data, &metaData)
     } else {
       versions := getGroupIds(cmdUrl)
-      latest := versions[len(versions) - 1]
-      metaData = metaData{group, artifact, latest, latest, versions}
+      if len(versions) > 0 {
+        latest := versions[len(versions) - 1]
+        metaData = Project{group, artifact, latest, latest, versions}
+      } else {
+        metaData = Project{group, artifact, "", "", versions}
+      }
     }
 
     return metaData
 }
 
+func saveFile(url string, filePath string, fileName string) {
+  page,_ := http.Get(url)
+  file,_ := os.Create(filePath + "/" + fileName)
+  if page.StatusCode == 200 {
+    io.Copy(file, page.Body)
+  }
+}
+
 func downloadProject(repoUrl string, project group) {
   for _,artifact := range project.artifacts {
     metaData := getMetaData(project.groupId, artifact, repoUrl)
-    url := repoUrl + string(project.groupId) + "/" + artifact + "/" + mataData.Latest
+
+    artifactPath := project.groupId + "/" + artifact + "/" + metaData.Latest
+    url := repoUrl + artifactPath
+    filePath := "~/Java-Bug-Analysis/" + artifactPath
+    fileName := artifact + "-" + metaData.Latest
+
+    saveFile(url, filePath, fileName + ".jar")
+    saveFile(url, filePath, fileName + ".pom")
+    saveFile(url, filePath, fileName + ".pom.sha1")
+    saveFile(url, filePath, fileName + ".pom.md5")
+    fmt.Println(fileName)
+    //resolveDependencies(url)
+  }
 }
 
 func mvnDownloadProject(repoUrl string, project group, finished chan bool) {
