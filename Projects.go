@@ -147,29 +147,33 @@ func getMetaData(group string, artifact string, url string) Project {
 }
 
 func saveFile(url string, filePath string, fileName string) {
-  page,_ := http.Get(url)
+  page,_ := http.Get(url + "/" + fileName)
   file,_ := os.Create(filePath + "/" + fileName)
+  fmt.Println(url)
   if page.StatusCode == 200 {
     io.Copy(file, page.Body)
   }
 }
 
-func downloadProject(repoUrl string, project group) {
+func downloadProject(repoUrl string, project group, complete chan bool) {
   for _,artifact := range project.artifacts {
     metaData := getMetaData(project.groupId, artifact, repoUrl)
 
     artifactPath := project.groupId + "/" + artifact + "/" + metaData.Latest
     url := repoUrl + artifactPath
-    filePath := "~/Java-Bug-Analysis/" + artifactPath
     fileName := artifact + "-" + metaData.Latest
+    home := os.Getenv("HOME")
+    filePath := home + "/" + artifactPath
+    os.MkdirAll(filePath, os.ModePerm);
 
     saveFile(url, filePath, fileName + ".jar")
     saveFile(url, filePath, fileName + ".pom")
     saveFile(url, filePath, fileName + ".pom.sha1")
     saveFile(url, filePath, fileName + ".pom.md5")
-    fmt.Println(fileName)
-    //resolveDependencies(url)
+
   }
+
+  complete <- true
 }
 
 func mvnDownloadProject(repoUrl string, project group, finished chan bool) {
@@ -184,25 +188,22 @@ func mvnDownloadProject(repoUrl string, project group, finished chan bool) {
 }
 
 func main() {
-  //batchLength := 10
-  //batchNum := 10
+  batchLength := 100
   repository := "http://repo1.maven.org/maven2/"
   projects := getProjectList(repository)
+  complete := make([]chan bool, batchLength)
 
-  downloadProject(repository, projects[1])
-  /*
-  for i := 0; i < batchNum; i++ {
-    complete := make([]chan bool, batchLength)
-    for j := 0; j < batchLength; j++ {
-      complete[j] = make(chan bool, 1)
-      go mvnDownloadProject(repository, projects[(i + 1) * j], complete[(i + 1) * j])
-    }
+  for i := range complete {
+    complete[i] = make(chan bool, 1)
+  }
 
-    for i := 0; i < batchLength; i++ {
-      <-complete[i]
-      fmt.Println("Downloaded " + projects[i].groupId)
-    }
+  for i := 0; i < batchLength; i++ {
+    go downloadProject(repository, projects[i], complete[i])
+  }
+
+  for i := 0; i < batchLength; i++ {
+    <-complete[i]
+    fmt.Println("Downloaded " + projects[i].groupId)
   }
   fmt.Println("Download completed")
-  */
 }
