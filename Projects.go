@@ -10,32 +10,25 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
-type Project struct {
-	GroupId    string   `xml:"groupId"`
-	ArtifactId string   `xml:"artifactId"`
-	Latest     string   `xml:"versioning>latest"`
-	Release    string   `xml:"versioning>release"`
-	Versions   []string `xml:"versioning>versions>version"`
+type projectRelease struct {
+	latest   string   `xml:"versioning>latest"`
+	release  string   `xml:"versioning>release"`
+	versions []string `xml:"versioning>versions>version"`
+}
+
+type artifact struct {
+	name    string
+	latest  string
+	release string
 }
 
 type group struct {
 	groupId   string
-	artifacts []string
-}
-
-func checkErr(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func checkWarning(err error) {
-	if err != nil {
-		fmt.Println(err)
-	}
+	artifacts []artifact
 }
 
 func getPageLinks(url string) []string {
@@ -69,14 +62,13 @@ func getPageLinks(url string) []string {
 }
 
 func saveGroups(groups []group) {
-	file, err := os.Create("groupIds.txt")
-	checkWarning(err)
+	file, _ := os.Create("groupIds.txt")
 
 	for i := range groups {
 		groupCsv := groups[i].groupId
 
 		for _, artifact := range groups[i].artifacts {
-			groupCsv = groupCsv + "," + artifact
+			groupCsv = groupCsv + "," + artifact.name + "." + artifact.latest
 		}
 		newLine := []byte(groupCsv + "\n")
 
@@ -107,7 +99,12 @@ func getProjectList(baseUrl string) []group {
 		groupList := make([]group, len(groupIds))
 
 		for i := range groupIds {
-			artifacts := getPageLinks(baseUrl + groupIds[i])
+			artifactNames := getPageLinks(baseUrl + groupIds[i])
+			artifacts := make([]artifact, len(artifactNames))
+			for j := range artifacts {
+				metaData := getMetaData(groupIds[i], artifactNames[j], baseUrl)
+				artifacts[j] = artifact{artifactNames[j], metaData.latest, metaData.release}
+			}
 			groupList[i] = group{groupIds[i], artifacts}
 		}
 		saveGroups(groupList)
@@ -120,12 +117,11 @@ func getProjectList(baseUrl string) []group {
 
 }
 
-func getMetaData(group string, artifact string, url string) Project {
-	var metaData Project
+func getMetaData(group string, artifact string, url string) projectRelease {
+	var metaData projectRelease
 
 	cmdUrl := url + string(group) + "/" + artifact + "/maven-metadata.xml"
 	page, err := http.Get(cmdUrl)
-	checkWarning(err)
 
 	if err == nil && page.StatusCode == 200 {
 		data, _ := ioutil.ReadAll(page.Body)
@@ -134,9 +130,9 @@ func getMetaData(group string, artifact string, url string) Project {
 		versions := getPageLinks(cmdUrl)
 		if len(versions) > 0 {
 			latest := versions[len(versions)-1]
-			metaData = Project{group, artifact, latest, latest, versions}
+			metaData = projectRelease{latest, latest, versions}
 		} else {
-			metaData = Project{group, artifact, "", "", versions}
+			metaData = projectRelease{"", "", versions}
 		}
 	}
 
@@ -144,23 +140,23 @@ func getMetaData(group string, artifact string, url string) Project {
 }
 
 func saveFile(url string, filePath string, fileName string) {
-	page, err := http.Get(url + "/" + fileName)
-	file, pathErr := os.Create(filePath + "/" + fileName)
-	checkWarning(pathErr)
+	_, err := os.Open(filePath + "/" + fileName)
+	if err != nil {
+		page, err := http.Get(url + "/" + fileName)
+		file, _ := os.Create(filePath + "/" + fileName)
 
-	if err == nil {
-		if page.StatusCode == 200 {
-			io.Copy(file, page.Body)
+		if err == nil {
+			if page.StatusCode == 200 {
+				io.Copy(file, page.Body)
+			}
 		}
 	}
 }
 
-func downloadArtifact(group string, artifact string, repoUrl string, finished chan bool) {
-	metaData := getMetaData(group, artifact, repoUrl)
-
-	artifactPath := group + "/" + artifact + "/" + metaData.Latest
+func downloadArtifact(group string, project artifact, repoUrl string, finished chan bool) {
+	artifactPath := group + "/" + project.name + "/" + project.latest
 	url := repoUrl + artifactPath
-	fileName := artifact + "-" + metaData.Latest
+	fileName := project.name + "-" + project.latest
 	home := os.Getenv("HOME")
 	filePath := home + "/.m2/repository/" + artifactPath
 	os.MkdirAll(filePath, os.ModePerm)
@@ -177,7 +173,7 @@ func downloadProject(repoUrl string, project group, complete chan bool) {
 	finished := make([]chan bool, len(project.artifacts))
 	for i := range project.artifacts {
 		finished[i] = make(chan bool)
-		downloadArtifact(project.groupId, project.artifacts[i], repoUrl, finished[i])
+		go downloadArtifact(project.groupId, project.artifacts[i], repoUrl, finished[i])
 	}
 
 	for i := range finished {
@@ -187,27 +183,32 @@ func downloadProject(repoUrl string, project group, complete chan bool) {
 	complete <- true
 }
 
-func main() {
-	batchLength := 1000
-	runtime.GOMAXPROCS(runtime.NumCPU())
+func GetProjects(numberOfProjects int) []group {
 	repository := "http://repo1.maven.org/maven2/"
 	projects := getProjectList(repository)
-	if batchLength >= len(projects) {
-		batchLength = len(projects)
-	}
-	complete := make([]chan bool, batchLength)
+	complete := make([]chan bool, len(projects))
 	count := 0
+	projectsUsed := len(projects)
+	runtime.GOMAXPROCS(runtime.NumCPU())
 
-	for i := 0; i < batchLength; i++ {
+	for i := range projects {
+		if count >= numberOfProjects {
+			projectsUsed = i
+			break
+		}
+
 		complete[i] = make(chan bool, 1)
 		count += len(projects[i].artifacts)
 		go downloadProject(repository, projects[i], complete[i])
 	}
 
-	for i := 0; i < batchLength; i++ {
+	for i := 0; i < projectsUsed; i++ {
 		<-complete[i]
 		fmt.Println("Downloaded " + projects[i].groupId)
 	}
+
 	fmt.Println("Download completed")
-	fmt.Println("Downloaded " + string(count) + "projects")
+	fmt.Println("Downloaded " + strconv.Itoa(count) + " projects")
+
+	return projects[0 : projectsUsed-1]
 }
