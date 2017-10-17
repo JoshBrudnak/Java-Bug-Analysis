@@ -68,7 +68,7 @@ func saveGroups(groups []group) {
 		groupCsv := groups[i].groupId
 
 		for _, artifact := range groups[i].artifacts {
-			groupCsv = groupCsv + "," + artifact.name + "." + artifact.latest
+			groupCsv = groupCsv + "," + artifact.name + "." + artifact.latest + "." + artifact.release
 		}
 		newLine := []byte(groupCsv + "\n")
 
@@ -84,7 +84,19 @@ func readGroups(file *os.File) []group {
 	for scanner.Scan() {
 		line := string(scanner.Text())
 		lineParts := strings.Split(line, ",")
-		groups = append(groups, group{lineParts[0], lineParts[1:]})
+        var projects []artifact
+
+        for i := 1; i < len(lineParts); i++ {
+		  artifactParts := strings.Split(lineParts[i], ".")
+
+          if len(artifactParts) == 2 {
+            projects = append(projects, artifact{artifactParts[0], artifactParts[1], artifactParts[2]})
+          } else {
+            fmt.Println("Incorrect csv formatting")
+          }
+        }
+
+		groups = append(groups, group{lineParts[0], projects})
 	}
 	file.Close()
 
@@ -103,6 +115,7 @@ func getProjectList(baseUrl string) []group {
 			artifacts := make([]artifact, len(artifactNames))
 			for j := range artifacts {
 				metaData := getMetaData(groupIds[i], artifactNames[j], baseUrl)
+                fmt.Println(groupList[i])
 				artifacts[j] = artifact{artifactNames[j], metaData.latest, metaData.release}
 			}
 			groupList[i] = group{groupIds[i], artifacts}
@@ -142,15 +155,16 @@ func getMetaData(group string, artifact string, url string) projectRelease {
 func saveFile(url string, filePath string, fileName string) {
 	_, err := os.Open(filePath + "/" + fileName)
 	if err != nil {
-		page, err := http.Get(url + "/" + fileName)
+      fmt.Println(err)
+		page, pageErr := http.Get(url + "/" + fileName)
 		file, _ := os.Create(filePath + "/" + fileName)
 
-		if err == nil {
+		if pageErr == nil {
 			if page.StatusCode == 200 {
 				io.Copy(file, page.Body)
 			}
 		}
-	}
+    }
 }
 
 func downloadArtifact(group string, project artifact, repoUrl string, finished chan bool) {
@@ -211,4 +225,8 @@ func GetProjects(numberOfProjects int) []group {
 	fmt.Println("Downloaded " + strconv.Itoa(count) + " projects")
 
 	return projects[0 : projectsUsed-1]
+}
+
+func main() {
+  GetProjects(20000)
 }
