@@ -39,11 +39,10 @@ func getPageLinks(url string) ([]string, error) {
 
     for err != nil {
         if errCount == 240 {
-            panic(err)
 			//return []string{}, err
         }
         fmt.Println(err)
-		time.Sleep(1000)
+		time.Sleep(10000)
         errCount++
 	    page, err = http.Get(url)
     }
@@ -115,52 +114,37 @@ func readGroups(file *os.File) []group {
 	return groups
 }
 
-func getGroupIds(baseUrl) {
-	rootGroupIds, _ := getPageLinks(baseUrl)
-    for _,group := range rootGroupIds {
-		secondIds, _ := getPageLinks(baseUrl + "/" + group)
-    	for _,element := range secondIds {
-			secondIds,err := getPageLinks(baseUrl + "/" + element + "maven-metadata.xml")
-			if err != nil {
-				findGroupIds()
-			}
-        }
-	}
+func getRecursiveIds(baseUrl string, groupIds []string) []string {
+      var finIds []string
+      for i := range groupIds {
+         fmt.Println(groupIds[i])
+         _,err := http.Get(baseUrl + groupIds[0] + "/maven-metadata.xml")
+         if err != nil {
+           return groupIds
+         } else {
+           var newIds []string
+           newGParts,_ := getPageLinks(baseUrl + groupIds[i])
+
+         for j := range newGParts {
+             newIds = append(newIds, groupIds[i] + "/" + newGParts[j])
+         }
+
+         ids := getRecursiveIds(baseUrl, newIds)
+
+         for _,id := range ids {
+           finIds = append(finIds, id)
+         }
+      }
 }
 
-func getProjectList(baseUrl string) []group {
-    groupIds,_ := getGroupIds(baseUrl)
-	file, err := os.Open("groupIds.txt")
-    defer file.Close()
+      return finIds
+}
 
-	if err != nil {
-		groupList := make([]group, len(groupIds))
+func getGroupIds(baseUrl string) []string {
+	rootGroupIds, _ := getPageLinks(baseUrl)
+    allGroupIds := getRecursiveIds(baseUrl, rootGroupIds)
 
-		for i := range groupIds {
-			artifactNames, artErr := getPageLinks(baseUrl + groupIds[i])
-			fmt.Println("Found: " + groupIds[i])
-
-			if artErr != nil {
-                fmt.Println("Artifact Error")
-				fmt.Println(artErr)
-			} else {
-				artifacts := make([]artifact, len(artifactNames))
-				for j := range artifacts {
-					metaData := getMetaData(groupIds[i], artifactNames[j], baseUrl)
-					artifacts[j] = artifact{artifactNames[j], metaData.latest, metaData.release}
-				}
-				groupList[i] = group{groupIds[i], artifacts}
-			}
-		}
-
-		fmt.Println(groupList)
-		saveGroups(groupList)
-
-		return groupList
-	} else {
-		return readGroups(file)
-	}
-
+    return allGroupIds
 }
 
 func getMetaData(group string, artifact string, url string) projectRelease {
@@ -235,7 +219,14 @@ func downloadProject(repoUrl string, project group) {
 
 func GetProjects(numberOfProjects int) []group {
 	repository := "http://repo1.maven.org/maven2/"
-	projects := getProjectList(repository)
+    projects := getGroupIds(repository)
+
+    for i := range group {
+        fmt.Println(projects[i])
+    }
+
+    fmt.Println(len(group))
+	//projects := getProjectList(repository)
 	complete := make([]chan bool, len(projects))
 	count := 0
 	projectsUsed := len(projects)
@@ -254,12 +245,10 @@ func GetProjects(numberOfProjects int) []group {
 		fmt.Println("Downloaded " + projects[i].groupId)
 	}
 
-/*
 	for i := 0; i < projectsUsed; i++ {
 		<-complete[i]
 		fmt.Println("Downloaded " + projects[i].groupId)
 	}
-*/
 
 	fmt.Println("Download completed")
 	fmt.Println("Downloaded " + strconv.Itoa(count) + " projects")
