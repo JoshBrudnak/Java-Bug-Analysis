@@ -29,10 +29,13 @@ func runFindbugs(projGroup group) {
 }
 
 func main() {
-	projectList := GetProjects(20000)
+	//projectList := GetProjects(20000)
+	_ = GetProjects(20000)
 
-	for i := range projectList {
-		runFindbugs(projectList[i])
-		fmt.Println("finished analysing " + projectList[i].groupId)
-	}
+	/*
+		for i := range projectList {
+			runFindbugs(projectList[i])
+			fmt.Println("finished analysing " + projectList[i].groupId)
+		}
+	*/
 }

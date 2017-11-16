@@ -12,7 +12,6 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-    "time"
 )
 
 type projectRelease struct {
@@ -34,18 +33,17 @@ type group struct {
 
 func getPageLinks(url string) ([]string, error) {
 	var list []string
-    errCount := 0
 	page, err := http.Get(url)
 
-    for err != nil {
-        if errCount == 240 {
-			//return []string{}, err
+	if err != nil {
+		fmt.Println(err)
+        if(page != nil) {
+          page.Body.Close()
         }
-        fmt.Println(err)
-		time.Sleep(10000)
-        errCount++
-	    page, err = http.Get(url)
-    }
+
+		return list, err
+	}
+	defer page.Body.Close()
 
 	tokenizer := html.NewTokenizer(page.Body)
 
@@ -65,8 +63,6 @@ func getPageLinks(url string) ([]string, error) {
 			}
 		}
 	}
-
-	page.Body.Close()
 
 	return list, err
 }
@@ -115,60 +111,63 @@ func readGroups(file *os.File) []group {
 }
 
 func getRecursiveIds(baseUrl string, groupIds []string) []string {
-      var finIds []string
-      for i := range groupIds {
-         fmt.Println(groupIds[i])
-         _,err := http.Get(baseUrl + groupIds[0] + "/maven-metadata.xml")
-         if err != nil {
-           return groupIds
-         } else {
-           var newIds []string
-           newGParts,_ := getPageLinks(baseUrl + groupIds[i])
+	var finIds []string
+	for i := range groupIds {
+		fmt.Println(groupIds[i])
+		_, err := http.Get(baseUrl + groupIds[i] + "/maven-metadata.xml")
+		if err != nil {
+			return groupIds
+		} else {
+			var newIds []string
+			newGParts, _ := getPageLinks(baseUrl + groupIds[i])
 
-         for j := range newGParts {
-             newIds = append(newIds, groupIds[i] + "/" + newGParts[j])
-         }
+			for j := range newGParts {
+				newIds = append(newIds, groupIds[i]+"/"+newGParts[j])
+			}
 
-         ids := getRecursiveIds(baseUrl, newIds)
+			ids := getRecursiveIds(baseUrl, newIds)
 
-         for _,id := range ids {
-           finIds = append(finIds, id)
-         }
-      }
-}
+			for _, id := range ids {
+				finIds = append(finIds, id)
+			}
+		}
+	}
 
-      return finIds
+	return finIds
 }
 
 func getGroupIds(baseUrl string) []string {
 	rootGroupIds, _ := getPageLinks(baseUrl)
-    allGroupIds := getRecursiveIds(baseUrl, rootGroupIds)
+	allGroupIds := getRecursiveIds(baseUrl, rootGroupIds)
 
-    return allGroupIds
+	return allGroupIds
 }
 
-func getMetaData(group string, artifact string, url string) projectRelease {
-	var metaData projectRelease
+func getMetaData(projects []string, url string) []projectRelease {
+	var metaData []projectRelease
 
-	cmdUrl := url + string(group) + "/" + artifact + "/maven-metadata.xml"
-	page, err := http.Get(cmdUrl)
+	for _, artifact := range projects {
+		var data projectRelease
+		cmdUrl := url + "/" + artifact + "/maven-metadata.xml"
+		page, err := http.Get(cmdUrl)
 
-	if err != nil {
-        if page != nil && page.StatusCode == 200 {
-			data, _ := ioutil.ReadAll(page.Body)
-			xml.Unmarshal(data, &metaData)
-        }
-	} else {
-		versions, _ := getPageLinks(cmdUrl)
-		if len(versions) > 0 {
-			latest := versions[len(versions)-1]
-			metaData = projectRelease{latest, latest, versions}
+		if err != nil {
+			if page != nil && page.StatusCode == 200 {
+				pageData, _ := ioutil.ReadAll(page.Body)
+				xml.Unmarshal(pageData, &data)
+			    page.Body.Close()
+			}
 		} else {
-			metaData = projectRelease{"", "", versions}
+			versions, _ := getPageLinks(cmdUrl)
+			if len(versions) > 0 {
+				latest := versions[len(versions)-1]
+				data = projectRelease{latest, latest, versions}
+			} else {
+				data = projectRelease{"", "", versions}
+			}
 		}
+		metaData = append(metaData, data)
 	}
-
-	page.Body.Close()
 
 	return metaData
 }
@@ -179,20 +178,23 @@ func saveFile(url string, filePath string, fileName string) {
 		fmt.Println(err)
 		page, pageErr := http.Get(url + "/" + fileName)
 		file, _ := os.Create(filePath + "/" + fileName)
-        defer page.Body.Close()
 
 		if pageErr == nil {
 			if page.StatusCode == 200 {
 				io.Copy(file, page.Body)
 			}
 		}
+
+		defer page.Body.Close()
+		defer file.Close()
 	}
 }
 
-func downloadArtifact(group string, project artifact, repoUrl string, finished chan bool) {
-	artifactPath := group + "/" + project.name + "/" + project.latest
+func downloadProject(projName string, repoUrl string) {
+	latest := "1.0.0"
+	artifactPath := projName + "/" + latest
 	url := repoUrl + artifactPath
-	fileName := project.name + "-" + project.latest
+	fileName := projName + "-" + latest
 	home := os.Getenv("HOME")
 	filePath := home + "/.m2/repository/" + artifactPath
 	os.MkdirAll(filePath, os.ModePerm)
@@ -202,32 +204,35 @@ func downloadArtifact(group string, project artifact, repoUrl string, finished c
 	saveFile(url, filePath, fileName+".pom.sha1")
 	saveFile(url, filePath, fileName+".pom.md5")
 
-	finished <- true
+	//finished <- true
 }
 
-func downloadProject(repoUrl string, project group) {
+/*
+func downloadBatch(repoUrl string, projects []string) {
 	finished := make([]chan bool, len(project.artifacts))
 	for i := range project.artifacts {
 		finished[i] = make(chan bool)
-		go downloadArtifact(project.groupId, project.artifacts[i], repoUrl, finished[i])
+		go downloadArtifact(project[i], repoUrl, finished[i])
 	}
 
 	for i := range finished {
 		<-finished[i]
 	}
 }
+*/
 
-func GetProjects(numberOfProjects int) []group {
+func GetProjects(numberOfProjects int) []string {
 	repository := "http://repo1.maven.org/maven2/"
-    projects := getGroupIds(repository)
+	groups := getGroupIds(repository)
+	projects := getMetaData(groups, repository)
 
-    for i := range group {
-        fmt.Println(projects[i])
-    }
+	for i := range groups {
+		fmt.Println("main!!!!!!!!!!!!!!!!!")
+		fmt.Println(groups[i])
+	}
 
-    fmt.Println(len(group))
-	//projects := getProjectList(repository)
-	complete := make([]chan bool, len(projects))
+	fmt.Println(len(groups))
+	//complete := make([]chan bool, len(projects))
 	count := 0
 	projectsUsed := len(projects)
 	runtime.GOMAXPROCS(runtime.NumCPU())
@@ -238,20 +243,21 @@ func GetProjects(numberOfProjects int) []group {
 			break
 		}
 
-		complete[i] = make(chan bool, 1)
-		count += len(projects[i].artifacts)
-		fmt.Println("Downloading " + projects[i].groupId + " ...")
-		downloadProject(repository, projects[i])
-		fmt.Println("Downloaded " + projects[i].groupId)
+		//complete[i] = make(chan bool, 1)
+		count++
+		fmt.Println("Downloading " + groups[i] + " ...")
+		downloadProject(repository, groups[i])
+		fmt.Println("Downloaded " + groups[i])
 	}
 
 	for i := 0; i < projectsUsed; i++ {
-		<-complete[i]
-		fmt.Println("Downloaded " + projects[i].groupId)
+		//<-complete[i]
+		fmt.Println("Downloaded " + groups[i])
 	}
 
 	fmt.Println("Download completed")
 	fmt.Println("Downloaded " + strconv.Itoa(count) + " projects")
 
-	return projects[0 : projectsUsed-1]
+	//return projects[0 : projectsUsed-1]
+	return nil
 }
