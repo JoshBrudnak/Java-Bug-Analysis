@@ -8,11 +8,14 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
-	"os"
 	"runtime"
-	"strconv"
+    "os"
+	//"strconv"
 	"strings"
 )
+
+var finIds []string
+var count int
 
 type projectRelease struct {
 	latest   string   `xml:"versioning>latest"`
@@ -24,11 +27,6 @@ type artifact struct {
 	name    string
 	latest  string
 	release string
-}
-
-type group struct {
-	groupId   string
-	artifacts []artifact
 }
 
 func getPageLinks(url string) ([]string, error) {
@@ -65,51 +63,6 @@ func getPageLinks(url string) ([]string, error) {
 	return list, err
 }
 
-func saveGroups(groups []group) {
-	file, err := os.Create("groupIds.txt")
-	fmt.Println(err)
-	for i := range groups {
-		groupCsv := groups[i].groupId
-
-		for _, artifact := range groups[i].artifacts {
-			groupCsv = groupCsv + "," + artifact.name + "." + artifact.latest + "." + artifact.release
-		}
-		newLine := []byte(groupCsv + "\n")
-
-		file.Write(newLine)
-	}
-
-	file.Close()
-}
-
-func readGroups(file *os.File) []group {
-	var groups []group
-	scanner := bufio.NewScanner(file)
-
-	for scanner.Scan() {
-		line := string(scanner.Text())
-		lineParts := strings.Split(line, ",")
-		var projects []artifact
-
-		for i := 1; i < len(lineParts); i++ {
-			artifactParts := strings.Split(lineParts[i], ".")
-
-			if len(artifactParts) == 2 {
-				projects = append(projects, artifact{artifactParts[0], artifactParts[1], artifactParts[2]})
-			} else {
-				fmt.Println("Incorrect csv formatting")
-			}
-		}
-
-		groups = append(groups, group{lineParts[0], projects})
-	}
-	file.Close()
-
-	return groups
-}
-
-var finIds []string
-
 func getGroupIds(baseUrl string) {
 	fmt.Println(baseUrl)
 	page, err := http.Get(baseUrl + "maven-metadata.xml")
@@ -118,11 +71,10 @@ func getGroupIds(baseUrl string) {
 		page.Body.Close()
 	}
 
-	if err != nil {
+	if err == nil && page.StatusCode != 404 {
 		finIds = append(finIds, baseUrl)
 	} else {
 		newGParts, linkErr := getPageLinks(baseUrl)
-		fmt.Println(linkErr)
 		if linkErr == nil {
 			for i := range newGParts {
 				newUrl := baseUrl + newGParts[i] + "/"
@@ -132,13 +84,16 @@ func getGroupIds(baseUrl string) {
 	}
 }
 
-func getMetaData(projects []string, url string) []projectRelease {
+func getMetaData() []projectRelease {
 	var metaData []projectRelease
 
-	for _, artifact := range projects {
+	for _, artifact := range finIds {
 		var data projectRelease
-		cmdUrl := url + "/" + artifact + "/maven-metadata.xml"
+		cmdUrl := artifact + "maven-metadata.xml"
 		page, err := http.Get(cmdUrl)
+        if page != nil {
+          defer page.Body.Close()
+        }
 
 		if err != nil {
 			if page != nil && page.StatusCode == 200 {
@@ -155,6 +110,7 @@ func getMetaData(projects []string, url string) []projectRelease {
 				data = projectRelease{"", "", versions}
 			}
 		}
+
 		metaData = append(metaData, data)
 	}
 
@@ -179,11 +135,22 @@ func saveFile(url string, filePath string, fileName string) {
 	}
 }
 
-func downloadProject(projName string, repoUrl string) {
-	latest := "1.0.0"
-	artifactPath := projName + "/" + latest
-	url := repoUrl + artifactPath
-	fileName := projName + "-" + latest
+func saveGroups() {
+	file, _ := os.Create("groupIds.txt")
+
+	for i := range finIds {
+		newLine := []byte(finIds[i] + "\n")
+
+		file.Write(newLine)
+	}
+	file.Close()
+}
+
+
+func downloadProject(artifact string, version string) {
+	url := artifact + version
+    artifactPath := strings.Trim(url, "http://repo1.maven.org/")
+	fileName := projName + "-" + version
 	home := os.Getenv("HOME")
 	filePath := home + "/.m2/repository/" + artifactPath
 	os.MkdirAll(filePath, os.ModePerm)
@@ -192,38 +159,47 @@ func downloadProject(projName string, repoUrl string) {
 	saveFile(url, filePath, fileName+".pom")
 	saveFile(url, filePath, fileName+".pom.sha1")
 	saveFile(url, filePath, fileName+".pom.md5")
-
-	//finished <- true
 }
 
-func downloadBatchs(repoUrl string) {
-    newGParts, linkErr := getPageLinks(repoUrl)
-	finished := make([]chan bool, len(project.artifacts))
-	for i := range project.artifacts {
-		finished[i] = make(chan bool)
-		go downloadArtifact(project[i], repoUrl, finished[i])
-	}
+func getArtifactUrls(repoUrl string) {
+    file,fileErr := os.Open("groups.txt")
 
-	for i := range finished {
-		<-finished[i]
-	}
+    if file != nil {
+      defer file.Close()
+    }
+
+    if fileErr != nil {
+		rootProjects, err := getPageLinks(repoUrl)
+
+		if err != nil {
+           panic(err)
+        }
+
+	    for i := range rootProjects {
+            proj := repoUrl + rootProjects[i] + "/"
+		    getGroupIds(proj)
+	    }
+
+        fmt.Println("Final Length")
+        fmt.Println(len(finIds))
+        saveGroups()
+    } else {
+	   scanner := bufio.NewScanner(file)
+
+	   for scanner.Scan() {
+          finIds = append(finIds, string(scanner.Text()))
+       }
+    }
 }
 
 func GetProjects(numberOfProjects int) []string {
-	repository := "http://repo1.maven.org/maven2/"
-	getGroupIds(repository)
-	projects := getMetaData(groups, repository)
-
-	for i := range groups {
-		fmt.Println("main!!!!!!!!!!!!!!!!!")
-		fmt.Println(groups[i])
-	}
-
-	fmt.Println(len(groups))
-	//complete := make([]chan bool, len(projects))
-	count := 0
-	projectsUsed := len(projects)
+    count = 0
 	runtime.GOMAXPROCS(runtime.NumCPU())
+	repository := "http://repo1.maven.org/maven2/"
+	getArtifactUrls(repository)
+	projects := getMetaData()
+
+	projectsUsed := len(projects)
 
 	for i := range projects {
 		if count >= numberOfProjects {
@@ -231,21 +207,14 @@ func GetProjects(numberOfProjects int) []string {
 			break
 		}
 
-		//complete[i] = make(chan bool, 1)
 		count++
-		fmt.Println("Downloading " + groups[i] + " ...")
-		downloadProject(repository, groups[i])
-		fmt.Println("Downloaded " + groups[i])
-	}
-
-	for i := 0; i < projectsUsed; i++ {
-		//<-complete[i]
-		fmt.Println("Downloaded " + groups[i])
+		fmt.Println("Downloading " + finIds[i] + " ...")
+		downloadProject(finIds[i], projects[i].latest)
+		fmt.Println("Downloaded " + finIds[i])
 	}
 
 	fmt.Println("Download completed")
 	fmt.Println("Downloaded " + strconv.Itoa(count) + " projects")
 
-	//return projects[0 : projectsUsed-1]
-	return nil
+	return projects[0 : projectsUsed-1]
 }

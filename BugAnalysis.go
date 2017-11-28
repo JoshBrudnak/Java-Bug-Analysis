@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 )
 
 func checkErr(err error) {
@@ -18,6 +16,7 @@ func checkWarning(err error) {
 	}
 }
 
+/*
 func runFindbugs(projGroup group) {
 	for _, project := range projGroup.artifacts {
 		home := os.Getenv("HOME")
@@ -27,6 +26,7 @@ func runFindbugs(projGroup group) {
 		cmd.Run()
 	}
 }
+*/
 
 func main() {
 	//projectList := GetProjects(20000)
