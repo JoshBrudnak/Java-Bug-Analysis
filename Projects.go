@@ -36,12 +36,10 @@ func getPageLinks(url string) ([]string, error) {
 	page, err := http.Get(url)
 
 	if err != nil {
+		fmt.Println("page link error")
 		fmt.Println(err)
-        if(page != nil) {
-          page.Body.Close()
-        }
 
-		return list, err
+		return nil, err
 	}
 	defer page.Body.Close()
 
@@ -110,37 +108,28 @@ func readGroups(file *os.File) []group {
 	return groups
 }
 
-func getRecursiveIds(baseUrl string, groupIds []string) []string {
-	var finIds []string
-	for i := range groupIds {
-		fmt.Println(groupIds[i])
-		_, err := http.Get(baseUrl + groupIds[i] + "/maven-metadata.xml")
-		if err != nil {
-			return groupIds
-		} else {
-			var newIds []string
-			newGParts, _ := getPageLinks(baseUrl + groupIds[i])
+var finIds []string
 
-			for j := range newGParts {
-				newIds = append(newIds, groupIds[i]+"/"+newGParts[j])
-			}
+func getGroupIds(baseUrl string) {
+	fmt.Println(baseUrl)
+	page, err := http.Get(baseUrl + "maven-metadata.xml")
 
-			ids := getRecursiveIds(baseUrl, newIds)
+	if page != nil {
+		page.Body.Close()
+	}
 
-			for _, id := range ids {
-				finIds = append(finIds, id)
+	if err != nil {
+		finIds = append(finIds, baseUrl)
+	} else {
+		newGParts, linkErr := getPageLinks(baseUrl)
+		fmt.Println(linkErr)
+		if linkErr == nil {
+			for i := range newGParts {
+				newUrl := baseUrl + newGParts[i] + "/"
+				getGroupIds(newUrl)
 			}
 		}
 	}
-
-	return finIds
-}
-
-func getGroupIds(baseUrl string) []string {
-	rootGroupIds, _ := getPageLinks(baseUrl)
-	allGroupIds := getRecursiveIds(baseUrl, rootGroupIds)
-
-	return allGroupIds
 }
 
 func getMetaData(projects []string, url string) []projectRelease {
@@ -155,7 +144,7 @@ func getMetaData(projects []string, url string) []projectRelease {
 			if page != nil && page.StatusCode == 200 {
 				pageData, _ := ioutil.ReadAll(page.Body)
 				xml.Unmarshal(pageData, &data)
-			    page.Body.Close()
+				page.Body.Close()
 			}
 		} else {
 			versions, _ := getPageLinks(cmdUrl)
@@ -207,8 +196,8 @@ func downloadProject(projName string, repoUrl string) {
 	//finished <- true
 }
 
-/*
-func downloadBatch(repoUrl string, projects []string) {
+func downloadBatchs(repoUrl string) {
+    newGParts, linkErr := getPageLinks(repoUrl)
 	finished := make([]chan bool, len(project.artifacts))
 	for i := range project.artifacts {
 		finished[i] = make(chan bool)
@@ -219,11 +208,10 @@ func downloadBatch(repoUrl string, projects []string) {
 		<-finished[i]
 	}
 }
-*/
 
 func GetProjects(numberOfProjects int) []string {
 	repository := "http://repo1.maven.org/maven2/"
-	groups := getGroupIds(repository)
+	getGroupIds(repository)
 	projects := getMetaData(groups, repository)
 
 	for i := range groups {
